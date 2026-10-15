@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Giám Sát Té Ngã ESP32</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; text-align: center; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        .card { background: white; padding: 20px; margin: 15px 0; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .class-accel { font-size: 32px; font-weight: bold; color: #007bff; margin-top: 10px; }
+        .class-angle { font-size: 32px; font-weight: bold; color: #fd7e14; margin-top: 10px; }
+        .alert-box { font-size: 20px; font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 10px; background-color: #d4edda; color: #155724; }
+        .btn { padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; color: white; margin: 8px; transition: 0.2s; }
+        .btn-on { background-color: #28a745; }
+        .btn-off { background-color: #dc3545; }
+        .btn:hover { opacity: 0.85; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Hệ Thống Giám Sát & Cảnh Báo Té Ngã (Fall Detection)</h2>
+    
+    <div class="card">
+        <h3>Trạng thái hệ thống</h3>
+        <div id="status-alert" class="alert-box">Trạng thái: An toàn (Bình thường)</div>
+    </div>
+
+    <!-- Thẻ html hiển thị gia tốc dạng số -->
+    <div class="card">
+        <h3>Gia tốc tổng hợp cơ thể</h3>
+        <div class="class-accel">0.00 g</div>
+    </div>
+
+    <!-- Thẻ html hiển thị góc nghiêng dạng số -->
+    <div class="card">
+        <h3>Góc nghiêng thân người</h3>
+        <div class="class-angle">0.00 °</div>
+    </div>
+
+    <!-- 2 biểu đồ cập nhật trực tiếp thời gian thực -->
+    <div class="card">
+        <h3>Biểu đồ Real-time (Gia tốc & Góc nghiêng)</h3>
+        <canvas id="realtimeChart" width="400" height="180"></canvas>
+    </div>
+
+    <!-- Nút button điều khiển cơ cấu chấp hành (Manual mode) -->
+    <div class="card">
+        <h3>Điều khiển Thủ công (Manual Mode)</h3>
+        <div>
+            <strong>Đèn LED Cảnh Báo:</strong><br>
+            <button class="btn btn-on" onclick="controlActuator('led', 'ON')">Bật LED</button>
+            <button class="btn btn-off" onclick="controlActuator('led', 'OFF')">Tắt LED</button>
+        </div>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+        <div>
+            <strong>Loa Buzzer Báo Động:</strong><br>
+            <button class="btn btn-on" onclick="controlActuator('buzzer', 'ON')">Bật Loa</button>
+            <button class="btn btn-off" onclick="controlActuator('buzzer', 'OFF')">Tắt Loa</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+
+    client.on('connect', () => {
+        console.log("Đã kết nối MQTT Broker!");
+        client.subscribe('esp32/sensors');
+        client.subscribe('esp32/status');
+    });
+
+    const ctx = document.getElementById('realtimeChart').getContext('2d');
+    const realtimeChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'Gia tốc (g)', borderColor: '#007bff', data: [], tension: 0.2, fill: false },
+                { label: 'Góc nghiêng (°)', borderColor: '#fd7e14', data: [], tension: 0.2, fill: false }
+            ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+
+    client.on('message', (topic, payload) => {
+        if (topic === 'esp32/sensors') {
+            const data = JSON.parse(payload.toString());
+            
+            // Cập nhật dữ liệu vào các thẻ HTML class
+            document.querySelector('.class-accel').innerText = data.accel.toFixed(2) + ' g';
+            document.querySelector('.class-angle').innerText = data.angle.toFixed(2) + ' °';
+
+            const alertBox = document.getElementById('status-alert');
+            if (data.fall === 1) {
+                alertBox.innerText = "CẢNH BÁO KHẨN CẤP: Phát hiện té ngã!";
+                alertBox.style.backgroundColor = "#f8d7da";
+                alertBox.style.color = "#721c24";
+            } else {
+                alertBox.innerText = "Trạng thái: An toàn (Bình thường)";
+                alertBox.style.backgroundColor = "#d4edda";
+                alertBox.style.color = "#155724";
+            }
+
+            const timeNow = new Date().toLocaleTimeString();
+            if (realtimeChart.data.labels.length > 15) {
+                realtimeChart.data.labels.shift();
+                realtimeChart.data.datasets[0].data.shift();
+                realtimeChart.data.datasets[1].data.shift();
+            }
+            realtimeChart.data.labels.push(timeNow);
+            realtimeChart.data.datasets[0].data.push(data.accel);
+            realtimeChart.data.datasets[1].data.push(data.angle);
+            realtimeChart.update();
+        }
+    });
+
+    function controlActuator(device, state) {
+        client.publish(`esp32/control/${device}`, state);
+    }
+</script>
+
+</body>
+</html>
